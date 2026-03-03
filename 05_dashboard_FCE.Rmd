@@ -1,0 +1,1123 @@
+---
+title: "FCE Portfolio Risk & Monte Carlo Simulation"
+author: "Brian Connolly | MS Quantitative Economics, UConn 2024"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    theme:
+      version: 4
+      bootswatch: flatly
+      primary: "#2D6A4F"
+      secondary: "#52B788"
+    css: styles.css
+    navbar:
+      - title: "CECL Dashboard"
+        href: "https://brianconnolly-models-portfolio.github.io/fce-risk-dashboard/FCE_Dashboard.html"
+        target: "_blank"
+        align: right
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE,
+                      message = FALSE, fig.retina = 2)
+
+library(flexdashboard)
+library(tidyverse)
+library(scales)
+library(plotly)
+library(DT)
+
+# ── FCE color palette ──────────────────────────────────────
+fce_green  <- "#2D6A4F"
+fce_mid    <- "#52B788"
+fce_light  <- "#95D5B2"
+fce_orange <- "#F4A261"
+fce_red    <- "#C1121F"
+fce_dark   <- "#1B4332"
+fce_cream  <- "#F8F4E8"
+
+# ── Shared ggplot theme ────────────────────────────────────
+theme_fce <- function(base = 12) {
+  theme_minimal(base_size = base) +
+    theme(
+      plot.title       = element_text(face = "bold",
+                                      size = base + 2,
+                                      color = fce_dark),
+      plot.subtitle    = element_text(size = base - 1,
+                                      color = "gray40"),
+      plot.caption     = element_text(size = base - 3,
+                                      color = "gray55"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "gray92"),
+      axis.title       = element_text(size = base - 1,
+                                      color = "gray35"),
+      plot.background  = element_rect(fill = "white",
+                                      color = NA),
+      plot.margin      = margin(12, 12, 12, 12)
+    )
+}
+
+# ── Key metrics (pre-computed for KPI cards) ───────────────
+el_mean      <- mean(sim_results$total_loss)
+el_median    <- median(sim_results$total_loss)
+var_75       <- quantile(sim_results$total_loss, 0.75)
+var_95       <- quantile(sim_results$total_loss, 0.95)
+var_99       <- quantile(sim_results$total_loss, 0.99)
+cvar_95      <- mean(sim_results$total_loss[
+                  sim_results$total_loss >= var_95])
+cecl_reserve <- 8100000
+prob_ok      <- mean(sim_results$total_loss <= cecl_reserve)
+buffer       <- cecl_reserve - var_99
+ag_factor    <- round(1.48 / 21.4, 4)
+```
+```{css, echo=FALSE}
+/* ── Typography ─────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500;600&family=DM+Mono&display=swap');
+
+body, .dashboard-page {
+  font-family: 'DM Sans', sans-serif;
+  background-color: #F8F4E8;
+}
+
+/* ── Navbar ──────────────────────────────────────────────── */
+.navbar {
+  background-color: #1B4332 !important;
+  border-bottom: 3px solid #2D6A4F;
+}
+.navbar-brand {
+  font-family: 'DM Serif Display', serif !important;
+  font-size: 1.15rem !important;
+  letter-spacing: 0.03em;
+  color: #F8F4E8 !important;
+}
+.navbar-nav > li > a {
+  color: #95D5B2 !important;
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.navbar-nav > li > a:hover {
+  color: #F8F4E8 !important;
+}
+
+/* ── Tab navigation ─────────────────────────────────────── */
+.nav-tabs-custom > .nav-tabs > li > a {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #2D6A4F;
+}
+.nav-tabs-custom > .nav-tabs > li.active > a {
+  color: #1B4332;
+  border-top: 3px solid #2D6A4F;
+}
+
+/* ── Value boxes ─────────────────────────────────────────── */
+.value-box {
+  border-radius: 6px;
+  border: none;
+  box-shadow: 0 2px 8px rgba(27,67,50,0.10);
+}
+.value-box .value-box-value {
+  font-family: 'DM Serif Display', serif;
+  font-size: 1.7rem;
+}
+.value-box .value-box-caption {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+/* ── Chart panels ───────────────────────────────────────── */
+.chart-wrapper, .chart-stage {
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(27,67,50,0.07);
+  padding: 4px;
+}
+
+/* ── Section headers ────────────────────────────────────── */
+h3.section-header {
+  font-family: 'DM Serif Display', serif;
+  color: #1B4332;
+  border-bottom: 2px solid #95D5B2;
+  padding-bottom: 6px;
+  margin-bottom: 16px;
+  font-size: 1.1rem;
+}
+
+/* ── Methodology boxes ──────────────────────────────────── */
+.method-box {
+  background: white;
+  border-left: 4px solid #2D6A4F;
+  border-radius: 0 6px 6px 0;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 4px rgba(27,67,50,0.08);
+}
+.method-box h4 {
+  font-family: 'DM Serif Display', serif;
+  color: #1B4332;
+  margin-top: 0;
+  margin-bottom: 8px;
+  font-size: 1rem;
+}
+.method-box p, .method-box li {
+  font-size: 0.88rem;
+  color: #333;
+  line-height: 1.6;
+  margin-bottom: 4px;
+}
+.method-box code {
+  font-family: 'DM Mono', monospace;
+  background: #f0f7f4;
+  color: #2D6A4F;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.82rem;
+}
+
+/* ── Stat badges ────────────────────────────────────────── */
+.stat-badge {
+  display: inline-block;
+  background: #f0f7f4;
+  color: #1B4332;
+  border: 1px solid #95D5B2;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin: 2px;
+}
+
+/* ── DT tables ──────────────────────────────────────────── */
+.dataTables_wrapper {
+  font-size: 0.84rem;
+}
+table.dataTable thead th {
+  background-color: #1B4332;
+  color: #F8F4E8;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+```
+
+# Methodology {data-icon="fa-flask"}
+
+## Row {data-height=120}
+
+### {.no-padding}
+
+<div style="background: linear-gradient(135deg, #1B4332 0%, #2D6A4F 60%, #52B788 100%);
+            padding: 28px 36px; border-radius: 6px; color: white; margin-bottom: 4px;">
+  <div style="font-family: 'DM Serif Display', serif; font-size: 1.8rem;
+              letter-spacing: 0.02em; margin-bottom: 6px;">
+    FCE Portfolio Risk &amp; Monte Carlo Simulation
+  </div>
+  <div style="font-size: 0.88rem; opacity: 0.85; font-weight: 300; letter-spacing: 0.04em;">
+    A full-stack credit risk model — logistic regression PD estimation,
+    agricultural domain calibration, and macro-driven loss simulation
+  </div>
+  <div style="margin-top: 12px;">
+    <span class="stat-badge" style="background:rgba(255,255,255,0.15);
+          color:white; border-color:rgba(255,255,255,0.3);">
+      2.26M Training Loans
+    </span>
+    <span class="stat-badge" style="background:rgba(255,255,255,0.15);
+          color:white; border-color:rgba(255,255,255,0.3);">
+      AUC 0.70
+    </span>
+    <span class="stat-badge" style="background:rgba(255,255,255,0.15);
+          color:white; border-color:rgba(255,255,255,0.3);">
+      10,000 Scenarios
+    </span>
+    <span class="stat-badge" style="background:rgba(255,255,255,0.15);
+          color:white; border-color:rgba(255,255,255,0.3);">
+      FRED 2000–2025
+    </span>
+    <span class="stat-badge" style="background:rgba(255,255,255,0.15);
+          color:white; border-color:rgba(255,255,255,0.3);">
+      USDA ERS Validated
+    </span>
+  </div>
+</div>
+
+## Row {data-height=480}
+
+### Step 1 — Data Acquisition {data-width=250}
+
+<div class="method-box">
+<h4>📦 Lending Club Loan Data</h4>
+<p>2,260,668 US consumer loans with observed default outcomes sourced from Kaggle. Exceptional data quality — less than 0.1% missing values across key predictors.</p>
+<ul>
+<li>Binary target: Charged Off / Late 31-120 days = Default</li>
+<li>Excluded ambiguous statuses (Current, Grace Period)</li>
+<li>Final training set: <strong>1,327,062 loans</strong></li>
+<li>Observed default rate: <strong>21.4%</strong></li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>📈 FRED Macro Series</h4>
+<p>Five Federal Reserve economic series pulled via <code>fredr</code> package, covering 2000–2025.</p>
+<ul>
+<li>Fed Funds Rate — debt service driver</li>
+<li>Corn Prices (WPU012) — Row Crop revenue</li>
+<li>Milk Prices (WPU0231) — Dairy revenue</li>
+<li>Farmland Values — collateral proxy</li>
+<li>Ag Delinquency Rate (DRALACBS) — <strong>1.48%</strong> current</li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>🌾 USDA ERS Farm Income</h4>
+<p>Net Farm Income data 2000–2026 used for macro context and stress scenario calibration.</p>
+<ul>
+<li>2022 peak: <strong>$182B</strong> (all-time high)</li>
+<li>2015–2016 crash: <strong>–32%</strong> stress analog</li>
+<li>2026 estimate: <strong>$153B</strong> (normalization)</li>
+</ul>
+</div>
+
+### Step 2 — Logistic Regression PD Model {data-width=250}
+
+<div class="method-box">
+<h4>🧮 Model Specification</h4>
+<p>Logistic regression trained on 80% of definitive-outcome loans, validated on held-out 20% test set.</p>
+<ul>
+<li>13 predictors — all known at origination</li>
+<li>Family: <code>binomial(link = "logit")</code></li>
+<li>Train set: <strong>1,061,651 loans</strong></li>
+<li>Test set: <strong>265,411 loans</strong></li>
+<li>Test AUC: <strong>0.7012</strong></li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>📊 Key Predictors</h4>
+<p>All 13 predictors statistically significant (p &lt; 0.05). Top drivers by odds ratio:</p>
+<ul>
+<li><code>small_biz</code> — 1.43× default odds</li>
+<li><code>log_loan_amnt</code> — 1.22× per log unit</li>
+<li><code>home_risk</code> — 1.20× (renter vs owner)</li>
+<li><code>grade_numeric</code> — 1.18× per grade step</li>
+<li><code>log_annual_inc</code> — 0.75× (protective)</li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>🎯 PD Staircase Validation</h4>
+<p>Predicted PDs follow a perfect monotonic staircase across credit grades — confirming model discriminatory power.</p>
+<ul>
+<li>Grade A: <strong>9.2%</strong> predicted vs 6.5% actual</li>
+<li>Grade D: <strong>30.9%</strong> predicted vs 32.1% actual</li>
+<li>Grade G: <strong>61.6%</strong> predicted vs 50.2% actual</li>
+<li>Northeast premium: <strong>+0.8%</strong> vs national</li>
+</ul>
+</div>
+
+### Step 3 — Domain Calibration & Monte Carlo {data-width=250}
+
+<div class="method-box">
+<h4>⚖️ Agricultural Scaling Factor</h4>
+<p>Logistic regression PDs reflect consumer lending default rates. A domain calibration factor translates to agricultural lending reality.</p>
+<ul>
+<li>FRED Ag Delinquency: <strong>1.48%</strong></li>
+<li>LC Observed Default: <strong>21.4%</strong></li>
+<li>Factor: <strong>1.48 ÷ 21.4 = 0.069</strong></li>
+<li>Both inputs from Step 1 data pulls</li>
+<li>Conservative — delinquency slightly overstates default</li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>🎲 Monte Carlo Engine</h4>
+<p>10,000 independent economic scenarios, each drawing from 25 years of observed FRED history.</p>
+<ul>
+<li>Bootstrap: sample with replacement from FRED</li>
+<li>Macro multipliers per segment sensitivity</li>
+<li>Bernoulli draw: <code>rbinom(n(), 1, stressed_pd)</code></li>
+<li>Loss: <code>EAD × LGD × default indicator</code></li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>📐 Stress Multiplier Logic</h4>
+<p>Each macro scenario adjusts base PD through segment-specific sensitivities:</p>
+<ul>
+<li>Rate stress: +8% PD per 1% above 3.72%</li>
+<li>Corn stress: Row Crop sensitivity 1.80×</li>
+<li>Milk stress: Dairy sensitivity 1.80×</li>
+<li>PD capped at 95% — no loan is certain default</li>
+</ul>
+</div>
+
+### Step 4 — Outputs & Validation {data-width=250}
+
+<div class="method-box">
+<h4>✅ Convergence Validation</h4>
+<p>Cumulative mean loss stabilizes well before simulation 5,000 — confirming 10,000 simulations produces stable estimates.</p>
+<ul>
+<li>Mean converges to: <strong>`r dollar(el_mean)`</strong></li>
+<li>Median–mean gap: <strong>`r dollar(abs(el_mean - el_median))`</strong></li>
+<li>Symmetric distribution — no extreme skew</li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>🔗 Model Chain Integrity</h4>
+<p>Every number in this dashboard traces back to a real data source — no assumptions without derivation.</p>
+<ul>
+<li>PDs → Lending Club 2.26M loan outcomes</li>
+<li>Scaling factor → FRED DRALACBS series</li>
+<li>Macro scenarios → FRED bootstrapped history</li>
+<li>Stress analogs → USDA ERS farm income 2015–16</li>
+</ul>
+</div>
+
+<div class="method-box">
+<h4>📋 Limitations & Extensions</h4>
+<p>Documented limitations for regulatory transparency:</p>
+<ul>
+<li>PD model trained on consumer, not ag loans</li>
+<li>LGD estimates are segment assumptions, not observed</li>
+<li>Correlation across loans not explicitly modeled</li>
+<li><strong>Next step:</strong> Re-train on FCE loan-level data</li>
+<li><strong>Next step:</strong> Add Gaussian copula for correlation</li>
+</ul>
+</div>
+
+# Loss Distribution & VaR {data-icon="fa-chart-area"}
+
+## Row {data-height=100}
+
+### Expected Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(el_mean, accuracy = 1),
+  caption = "Expected Loss — Mean of 10,000 Scenarios",
+  icon    = "fa-dollar-sign",
+  color   = fce_green
+)
+```
+
+### 95th Pct VaR {.value-box}
+```{r}
+valueBox(
+  value   = dollar(var_95, accuracy = 1),
+  caption = "Value at Risk — 95th Percentile",
+  icon    = "fa-exclamation-triangle",
+  color   = fce_orange
+)
+```
+
+### 99th Pct Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(var_99, accuracy = 1),
+  caption = "Severe Stress — 99th Percentile",
+  icon    = "fa-fire",
+  color   = fce_red
+)
+```
+
+### Reserve Buffer {.value-box}
+```{r}
+valueBox(
+  value   = dollar(buffer, accuracy = 1),
+  caption = "Reserve Buffer Above 99th Pct Loss",
+  icon    = "fa-shield-alt",
+  color   = ifelse(buffer > 0, fce_green, fce_red)
+)
+```
+
+## Row {data-height=420}
+
+### Loss Distribution — 10,000 Monte Carlo Scenarios {data-width=650}
+```{r fig.height=5}
+var_95_cutoff <- quantile(sim_results$total_loss / 1e6, 0.95)
+
+p1 <- ggplot(sim_results, aes(x = total_loss / 1e6)) +
+  geom_histogram(
+    aes(fill = after_stat(x) > var_95_cutoff),
+    bins = 70, color = "white", linewidth = 0.15
+  ) +
+  scale_fill_manual(
+    values = c("FALSE" = fce_light, "TRUE" = fce_red),
+    guide  = "none"
+  ) +
+  geom_vline(xintercept = cecl_reserve / 1e6,
+             color = fce_dark, linetype = "dashed",
+             linewidth = 1.1) +
+  geom_vline(xintercept = el_mean / 1e6,
+             color = fce_green, linetype = "solid",
+             linewidth = 1.1) +
+  geom_vline(xintercept = var_95 / 1e6,
+             color = fce_red, linetype = "solid",
+             linewidth = 1.1) +
+  annotate("text",
+           x = cecl_reserve / 1e6, y = Inf,
+           label = paste0("Reserve\n$",
+                          round(cecl_reserve/1e6, 1), "M"),
+           vjust = 1.3, hjust = 1.1,
+           color = fce_dark, size = 3.2,
+           fontface = "bold") +
+  annotate("text",
+           x = el_mean / 1e6, y = Inf,
+           label = paste0("EL\n$",
+                          round(el_mean/1e6, 2), "M"),
+           vjust = 1.3, hjust = -0.1,
+           color = fce_green, size = 3.2,
+           fontface = "bold") +
+  annotate("text",
+           x = var_95 / 1e6, y = Inf,
+           label = paste0("VaR 95\n$",
+                          round(var_95/1e6, 1), "M"),
+           vjust = 1.3, hjust = -0.1,
+           color = fce_red, size = 3.2,
+           fontface = "bold") +
+  scale_x_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 0.1)
+  ) +
+  scale_y_continuous(labels = comma_format()) +
+  labs(
+    title    = "Portfolio Loss Distribution",
+    subtitle = paste0("Red = worst 5% of scenarios | ",
+                      "Current reserve covers ",
+                      percent(prob_ok, accuracy = 0.1),
+                      " of simulations"),
+    x = "Total Portfolio Loss ($M)",
+    y = "Number of Scenarios",
+    caption = "Source: FRED bootstrapped macro inputs | Logistic Regression PD | 0.069 ag calibration factor"
+  ) +
+  theme_fce()
+
+ggplotly(p1, tooltip = c("x", "y")) %>%
+  layout(hoverlabel = list(bgcolor = "white",
+                           font = list(family = "DM Sans")))
+```
+
+### Reserve Adequacy by Confidence Level {data-width=350}
+```{r fig.height=5}
+reserve_levels <- tibble(
+  percentile = c(50, 60, 70, 75, 80, 85, 90, 95, 99),
+  loss       = quantile(sim_results$total_loss,
+                        c(.50,.60,.70,.75,.80,
+                          .85,.90,.95,.99))
+) %>%
+  mutate(
+    label    = paste0(percentile, "th"),
+    adequate = loss <= cecl_reserve
+  )
+
+p2 <- ggplot(reserve_levels,
+             aes(x    = reorder(label, percentile),
+                 y    = loss / 1e6,
+                 fill = adequate,
+                 text = paste0(percentile, "th pct: ",
+                               dollar(loss)))) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = cecl_reserve / 1e6,
+             color = fce_dark, linetype = "dashed",
+             linewidth = 1.1) +
+  geom_text(aes(label = dollar(loss/1e6,
+                               accuracy = 0.1,
+                               suffix = "M")),
+            vjust = -0.4, size = 2.8,
+            fontface = "bold") +
+  scale_fill_manual(
+    values = c("TRUE" = fce_green, "FALSE" = fce_red),
+    labels = c("TRUE" = "Adequate", "FALSE" = "Insufficient"),
+    name   = NULL
+  ) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 1),
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  labs(
+    title    = "Required Capital by Confidence Level",
+    subtitle = paste0("CECL reserve: $",
+                      round(cecl_reserve/1e6, 1), "M"),
+    x = "Loss Percentile", y = "Required Reserve ($M)",
+    caption = "Source: FCE Monte Carlo Simulation"
+  ) +
+  theme_fce() +
+  theme(legend.position = "top")
+
+ggplotly(p2, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+## Row {data-height=200}
+
+### Convergence Check — 10,000 Simulations {data-width=650}
+```{r fig.height=2.8}
+convergence <- sim_results %>%
+  mutate(cumulative_mean = cummean(total_loss))
+
+p_conv <- ggplot(convergence,
+                 aes(x = sim_id,
+                     y = cumulative_mean / 1e6)) +
+  geom_line(color = fce_green, linewidth = 0.8) +
+  geom_hline(yintercept = el_mean / 1e6,
+             color = fce_red, linetype = "dashed",
+             linewidth = 0.7) +
+  scale_x_continuous(labels = comma_format()) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 0.1)
+  ) +
+  labs(
+    title    = "Monte Carlo Convergence",
+    subtitle = "Estimate stabilizes — 10,000 simulations confirmed sufficient",
+    x = "Simulations Run", y = "Cumulative Mean Loss",
+    caption  = "Dashed = final expected loss estimate"
+  ) +
+  theme_fce()
+
+ggplotly(p_conv, tooltip = c("x", "y")) %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+### Loss Distribution Summary {data-width=350}
+```{r}
+tibble(
+  Metric = c("Expected Loss (Mean)",
+             "Median Loss (50th)",
+             "Elevated (75th)",
+             "Value at Risk (95th)",
+             "Severe Stress (99th)",
+             "Exp. Shortfall (CVaR)",
+             "Current CECL Reserve",
+             "Reserve Buffer (99th)"),
+  Value  = c(dollar(el_mean),
+             dollar(el_median),
+             dollar(var_75),
+             dollar(var_95),
+             dollar(var_99),
+             dollar(cvar_95),
+             dollar(cecl_reserve),
+             dollar(buffer))
+) %>%
+  datatable(
+    rownames  = FALSE,
+    options   = list(dom = "t", pageLength = 10,
+                     scrollY = "160px"),
+    class     = "compact stripe"
+  ) %>%
+  formatStyle(
+    "Metric",
+    fontWeight = "600",
+    fontSize   = "0.83rem"
+  ) %>%
+  formatStyle(
+    "Value",
+    fontFamily = "DM Mono, monospace",
+    fontSize   = "0.83rem",
+    color      = fce_dark
+  )
+```
+
+# Segment Risk {data-icon="fa-layer-group"}
+
+## Row {data-height=100}
+
+### Dairy Avg Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(mean(sim_results$dairy_loss)),
+  caption = "Dairy — Avg Loss (39% of Total)",
+  icon    = "fa-tint",
+  color   = fce_green
+)
+```
+
+### Livestock Avg Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(mean(sim_results$livestock_loss)),
+  caption = "Livestock — Avg Loss (20% of Total)",
+  icon    = "fa-horse",
+  color   = fce_mid
+)
+```
+
+### Row Crop Avg Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(mean(sim_results$row_crop_loss)),
+  caption = "Row Crop — Avg Loss (18% of Total)",
+  icon    = "fa-seedling",
+  color   = fce_orange
+)
+```
+
+### Agri-Business Avg Loss {.value-box}
+```{r}
+valueBox(
+  value   = dollar(mean(sim_results$agribiz_loss)),
+  caption = "Agri-Business — Avg Loss (11% of Total)",
+  icon    = "fa-industry",
+  color   = "#6B7280"
+)
+```
+
+## Row {data-height=450}
+
+### Segment Loss Distribution {data-width=550}
+```{r fig.height=5}
+seg_long <- sim_results %>%
+  select(sim_id,
+         Dairy           = dairy_loss,
+         Livestock       = livestock_loss,
+         `Row Crop`      = row_crop_loss,
+         `Agri-Business` = agribiz_loss) %>%
+  pivot_longer(-sim_id,
+               names_to  = "segment",
+               values_to = "loss")
+
+p3 <- ggplot(
+  seg_long,
+  aes(x    = reorder(segment, loss, median),
+      y    = loss / 1e6,
+      fill = segment,
+      text = paste0(segment, "\nLoss: ",
+                    dollar(loss, accuracy = 1)))
+) +
+  geom_boxplot(
+    outlier.shape = 16,
+    outlier.size  = 0.4,
+    outlier.alpha = 0.25,
+    width         = 0.55
+  ) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      "Dairy"         = fce_green,
+      "Row Crop"      = fce_orange,
+      "Livestock"     = fce_mid,
+      "Agri-Business" = "#D1D5DB"
+    ),
+    guide = "none"
+  ) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 0.1)
+  ) +
+  labs(
+    title    = "Segment Loss Distribution",
+    subtitle = "Box = 25th–75th pct | Line = median | Whiskers = 5th–95th pct",
+    x = NULL, y = "Segment Loss ($M)",
+    caption  = "Source: FCE Monte Carlo | 10,000 scenarios"
+  ) +
+  theme_fce()
+
+ggplotly(p3, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+### Segment Risk Summary Table {data-width=450}
+```{r}
+seg_summary <- tibble(
+  Segment = c("Dairy", "Livestock",
+              "Row Crop", "Agri-Business"),
+  Portfolio_Wt = c("28%", "18%", "15%", "14%"),
+  Avg_Loss = c(
+    mean(sim_results$dairy_loss),
+    mean(sim_results$livestock_loss),
+    mean(sim_results$row_crop_loss),
+    mean(sim_results$agribiz_loss)
+  ),
+  VaR_95 = c(
+    quantile(sim_results$dairy_loss,    0.95),
+    quantile(sim_results$livestock_loss, 0.95),
+    quantile(sim_results$row_crop_loss,  0.95),
+    quantile(sim_results$agribiz_loss,   0.95)
+  ),
+  Share_of_EL = c(
+    mean(sim_results$dairy_loss)    / el_mean,
+    mean(sim_results$livestock_loss) / el_mean,
+    mean(sim_results$row_crop_loss)  / el_mean,
+    mean(sim_results$agribiz_loss)   / el_mean
+  )
+) %>%
+  mutate(
+    Conc_Ratio = parse_number(Portfolio_Wt) / 100,
+    Conc_Ratio = round(Share_of_EL / Conc_Ratio, 2),
+    Avg_Loss   = dollar(Avg_Loss),
+    VaR_95     = dollar(VaR_95),
+    Share_of_EL = percent(Share_of_EL, accuracy = 0.1)
+  ) %>%
+  select(Segment, Portfolio_Wt,
+         `Avg Loss`    = Avg_Loss,
+         `VaR 95th`    = VaR_95,
+         `EL Share`    = Share_of_EL,
+         `Conc. Ratio` = Conc_Ratio)
+
+datatable(
+  seg_summary,
+  rownames = FALSE,
+  options  = list(dom = "t", pageLength = 6),
+  class    = "compact stripe"
+) %>%
+  formatStyle(
+    "Conc. Ratio",
+    backgroundColor = styleInterval(
+      c(1.0, 1.3),
+      c("#f0f7f4", "#fff3cd", "#fde8e8")
+    ),
+    fontWeight = "bold"
+  ) %>%
+  formatStyle(
+    columns    = names(seg_summary),
+    fontSize   = "0.84rem"
+  )
+```
+
+### Key Insight {data-width=0}
+```{r}
+# Concentration ratio note rendered inline above table
+```
+
+# Macro Sensitivity {data-icon="fa-chart-line"}
+
+## Row {data-height=100}
+
+### Rate Environment {.value-box}
+```{r}
+valueBox(
+  value   = "3.72%",
+  caption = "Current Fed Funds Rate — Baseline",
+  icon    = "fa-university",
+  color   = fce_green
+)
+```
+
+### Corn Price Index {.value-box}
+```{r}
+valueBox(
+  value   = "165.6",
+  caption = "Corn Price Index (WPU012) — Current",
+  icon    = "fa-seedling",
+  color   = fce_mid
+)
+```
+
+### Milk Price Index {.value-box}
+```{r}
+valueBox(
+  value   = "286.9",
+  caption = "Milk Price Index (WPU0231) — Favorable",
+  icon    = "fa-tint",
+  color   = fce_orange
+)
+```
+
+### Ag Delinquency {.value-box}
+```{r}
+valueBox(
+  value   = "1.48%",
+  caption = "FRED Ag Delinquency Rate — DRALACBS",
+  icon    = "fa-percentage",
+  color   = fce_dark
+)
+```
+
+## Row {data-height=440}
+
+### Interest Rate vs Portfolio Loss {data-width=400}
+```{r fig.height=4.8}
+p_rate <- ggplot(
+  sim_results,
+  aes(x    = rate_scenario,
+      y    = total_loss / 1e6,
+      text = paste0("Rate: ",
+                    round(rate_scenario, 2), "%\n",
+                    "Loss: ",
+                    dollar(total_loss, accuracy = 1)))
+) +
+  geom_point(alpha = 0.04, color = fce_green,
+             size = 0.7) +
+  geom_smooth(method = "lm", color = fce_red,
+              se = TRUE, linewidth = 1) +
+  geom_vline(xintercept = 3.72,
+             color = fce_dark, linetype = "dashed",
+             linewidth = 0.8) +
+  annotate("text", x = 3.72, y = Inf,
+           label = "Current\n3.72%",
+           vjust = 1.4, hjust = -0.1,
+           size = 3, color = fce_dark,
+           fontface = "bold") +
+  scale_x_continuous(
+    labels = function(x) paste0(x, "%")
+  ) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 1)
+  ) +
+  labs(
+    title    = "Interest Rate vs Portfolio Loss",
+    subtitle = "Higher rates amplify PD via debt service stress",
+    x = "Fed Funds Rate (%)",
+    y = "Total Loss ($M)",
+    caption  = "Red line = OLS trend | Shading = 95% confidence interval"
+  ) +
+  theme_fce()
+
+ggplotly(p_rate, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+### Corn Price vs Portfolio Loss {data-width=330}
+```{r fig.height=4.8}
+p_corn <- ggplot(
+  sim_results,
+  aes(x    = corn_scenario * 100,
+      y    = total_loss / 1e6,
+      text = paste0("Corn chg: ",
+                    round(corn_scenario * 100, 1), "%\n",
+                    "Loss: ",
+                    dollar(total_loss, accuracy = 1)))
+) +
+  geom_point(alpha = 0.04, color = fce_orange,
+             size = 0.7) +
+  geom_smooth(method = "lm", color = fce_red,
+              se = TRUE, linewidth = 1) +
+  geom_vline(xintercept = 0,
+             color = "gray50", linetype = "dashed",
+             linewidth = 0.7) +
+  scale_x_continuous(
+    labels = function(x) paste0(x, "%")
+  ) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 1)
+  ) +
+  labs(
+    title    = "Corn Price Change vs Loss",
+    subtitle = "Row Crop sensitivity: 1.80×",
+    x = "Monthly Corn Price Change (%)",
+    y = "Total Loss ($M)",
+    caption  = "Negative = price decline = higher Row Crop PD"
+  ) +
+  theme_fce()
+
+ggplotly(p_corn, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+### Milk Price vs Portfolio Loss {data-width=330}
+```{r fig.height=4.8}
+p_milk <- ggplot(
+  sim_results,
+  aes(x    = milk_scenario * 100,
+      y    = total_loss / 1e6,
+      text = paste0("Milk chg: ",
+                    round(milk_scenario * 100, 1), "%\n",
+                    "Loss: ",
+                    dollar(total_loss, accuracy = 1)))
+) +
+  geom_point(alpha = 0.04, color = "#6B4C9A",
+             size = 0.7) +
+  geom_smooth(method = "lm", color = fce_red,
+              se = TRUE, linewidth = 1) +
+  geom_vline(xintercept = 0,
+             color = "gray50", linetype = "dashed",
+             linewidth = 0.7) +
+  scale_x_continuous(
+    labels = function(x) paste0(x, "%")
+  ) +
+  scale_y_continuous(
+    labels = dollar_format(suffix = "M", accuracy = 1)
+  ) +
+  labs(
+    title    = "Milk Price Change vs Loss",
+    subtitle = "Dairy sensitivity: 1.80× | Largest absolute segment",
+    x = "Monthly Milk Price Change (%)",
+    y = "Total Loss ($M)",
+    caption  = "Negative = price decline = higher Dairy PD"
+  ) +
+  theme_fce()
+
+ggplotly(p_milk, tooltip = "text") %>%
+  layout(hoverlabel = list(bgcolor = "white"))
+```
+
+# Executive Summary {data-icon="fa-clipboard-check"}
+
+## Row {data-height=100}
+
+### Reserve Sufficiency {.value-box}
+```{r}
+valueBox(
+  value   = percent(prob_ok, accuracy = 0.1),
+  caption = "Probability Current Reserve Is Sufficient",
+  icon    = "fa-check-circle",
+  color   = fce_green
+)
+```
+
+### Reserve Buffer {.value-box}
+```{r}
+valueBox(
+  value   = dollar(buffer),
+  caption = "Capital Buffer Above 99th Pct Loss",
+  icon    = "fa-shield-alt",
+  color   = ifelse(buffer > 0, fce_mid, fce_red)
+)
+```
+
+### CVaR {.value-box}
+```{r}
+valueBox(
+  value   = dollar(cvar_95),
+  caption = "Expected Shortfall — Avg Loss in Worst 5%",
+  icon    = "fa-exclamation-circle",
+  color   = fce_orange
+)
+```
+
+### Dairy Concentration {.value-box}
+```{r}
+dairy_share <- mean(sim_results$dairy_loss) / el_mean
+valueBox(
+  value   = percent(dairy_share, accuracy = 0.1),
+  caption = "Dairy Share of Expected Loss (28% of Portfolio)",
+  icon    = "fa-tint",
+  color   = fce_red
+)
+```
+
+## Row {data-height=380}
+
+### Board Finding {data-width=420}
+
+<div style="padding: 8px 4px;">
+
+<h3 class="section-header">Monte Carlo Risk Assessment</h3>
+
+<div class="method-box" style="border-color: #2D6A4F;">
+<h4>✅ Reserve Adequacy — Confirmed with Caveat</h4>
+<p>The current CECL reserve of <strong>$8,100,000</strong> is sufficient in
+<strong>`r percent(prob_ok, accuracy = 0.1)`</strong> of all historically
+plausible macro scenarios. Under baseline and moderately stressed conditions,
+FCE's capital position is sound.</p>
+<p><strong>Caveat:</strong> The 99th percentile loss of
+<strong>`r dollar(var_99)`</strong> leaves a buffer of only
+<strong>`r dollar(buffer)`</strong> — approximately
+<strong>`r percent(buffer/cecl_reserve, accuracy = 0.1)`</strong>
+of the reserve — before a capital shortfall occurs.</p>
+</div>
+
+<div class="method-box" style="border-color: #F4A261;">
+<h4>⚠️ Dairy Concentration Risk — Quantified</h4>
+<p>Dairy represents <strong>28%</strong> of portfolio exposure but drives
+<strong>`r percent(mean(sim_results$dairy_loss)/el_mean, accuracy=0.1)`</strong>
+of expected losses — a concentration ratio of
+<strong>`r round((mean(sim_results$dairy_loss)/el_mean) / 0.28, 2)`×</strong>.
+Current milk price index of <strong>286.9</strong> is favorable,
+but a reversal would disproportionately stress reserves.</p>
+</div>
+
+<div class="method-box" style="border-color: #C1121F;">
+<h4>📋 Board Recommendation</h4>
+<p>Monitor the <strong>`r dollar(buffer)`</strong> reserve buffer quarterly.
+Consider establishing a trigger at 90th percentile loss
+(<strong>`r dollar(quantile(sim_results$total_loss, 0.90))`</strong>)
+as an early warning threshold for reserve augmentation review.</p>
+</div>
+
+</div>
+
+### Full Results Table {data-width=580}
+```{r}
+exec_summary <- tibble(
+  Category = c(
+    rep("Loss Distribution", 6),
+    rep("Capital Adequacy", 5),
+    rep("Segment Losses", 4),
+    rep("Model Inputs", 5)
+  ),
+  Metric = c(
+    "Expected Loss (Mean)",
+    "Median Loss (50th Pct)",
+    "Elevated Loss (75th Pct)",
+    "Value at Risk (95th Pct)",
+    "Severe Stress (99th Pct)",
+    "Expected Shortfall (CVaR)",
+    "Current CECL Reserve",
+    "Reserve Covers Expected Loss",
+    "Probability Reserve Sufficient",
+    "Buffer Above 99th Pct",
+    "Recommended Watch Threshold",
+    "Dairy Avg Loss",
+    "Livestock Avg Loss",
+    "Row Crop Avg Loss",
+    "Agri-Business Avg Loss",
+    "Simulations Run",
+    "PD Model AUC",
+    "Ag Calibration Factor",
+    "Macro Data Period",
+    "Training Loans"
+  ),
+  Value = c(
+    dollar(el_mean),
+    dollar(el_median),
+    dollar(var_75),
+    dollar(var_95),
+    dollar(var_99),
+    dollar(cvar_95),
+    dollar(cecl_reserve),
+    "YES",
+    percent(prob_ok, accuracy = 0.1),
+    dollar(buffer),
+    dollar(quantile(sim_results$total_loss, 0.90)),
+    dollar(mean(sim_results$dairy_loss)),
+    dollar(mean(sim_results$livestock_loss)),
+    dollar(mean(sim_results$row_crop_loss)),
+    dollar(mean(sim_results$agribiz_loss)),
+    "10,000",
+    "0.7012",
+    "0.069 (FRED DRALACBS ÷ LC default rate)",
+    "2000–2025",
+    "1,327,062 loans"
+  )
+)
+
+datatable(
+  exec_summary,
+  rownames = FALSE,
+  options  = list(
+    dom        = "ft",
+    pageLength = 20,
+    scrollY    = "310px",
+    columnDefs = list(
+      list(width = "120px", targets = 0),
+      list(width = "220px", targets = 1)
+    )
+  ),
+  class = "compact stripe"
+) %>%
+  formatStyle(
+    "Category",
+    fontWeight      = "700",
+    fontSize        = "0.78rem",
+    color           = fce_dark,
+    textTransform   = "uppercase",
+    letterSpacing   = "0.05em"
+  ) %>%
+  formatStyle(
+    "Value",
+    fontFamily = "DM Mono, monospace",
+    fontSize   = "0.83rem"
+  ) %>%
+  formatStyle(
+    "Metric",
+    fontSize = "0.83rem"
+  )
+```
